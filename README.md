@@ -10,11 +10,14 @@ An interactive full-screen fluid metal playground built with a single HTML canva
 - **Hold click** to pull the metal in, release to push it away.
 - **Arrow keys / WASD** steer the glowing red core through the surface.
 - **Space** triggers a shockwave burst from the core.
+- **"See yourself in the metal"** asks for camera permission and reflects your webcam feed through the blobs, distorted like a convex mirror.
 - Works with touch on mobile.
 
 ## How it works
 
 A goo/metaball technique: soft radial-gradient "blobs" are drawn to an offscreen canvas, then composited onto the main canvas through a `blur` + `contrast` filter so overlapping shapes fuse into one continuous fluid surface. Each blob is shaded like a polished sphere (bright specular hotspot, dark gunmetal body) with some carrying an extra red accent glow to read as reflected light within the metal, rather than solid colored shapes.
+
+When camera reflection is turned on, each blob instead samples a zoomed-in, wobbling crop of the webcam frame centred on itself (faking the bulge of a convex mirror) and multiplies the same sphere-shading gradient on top, so it still reads as chrome rather than a flat video.
 
 ## Run locally
 

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>FLUID</title>
-<meta name="description" content="An interactive fluid blob playground — black, white and red. Move your mouse, steer with arrow keys, click to burst.">
+<meta name="description" content="An interactive liquid chrome playground — black, white and red. Move your mouse, steer with arrow keys, click to burst, or turn on your camera to see yourself reflected in the metal.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='45' fill='%23ff2b2b'/%3E%3C/svg%3E">
 <style>
   :root{
@@ -51,8 +51,12 @@
   #title span{
     color: #ff2b2b;
   }
+  #bottom{
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
   #hint{
-    align-self: flex-start;
     font-size: clamp(10px, 1.4vw, 13px);
     letter-spacing: 0.15em;
     text-transform: uppercase;
@@ -63,6 +67,22 @@
   }
   #hint b{ color: #ff2b2b; font-weight: 700; }
   .faded{ opacity: 0 !important; }
+  #camBtn{
+    pointer-events: auto;
+    margin-top: 10px;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.4);
+    color: #fff;
+    font-family: inherit;
+    font-size: clamp(9px, 1.2vw, 11px);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 0.6em 1em;
+    cursor: pointer;
+    transition: opacity 1.5s ease, border-color 0.2s ease, color 0.2s ease;
+  }
+  #camBtn:hover{ border-color: #ff2b2b; color: #ff2b2b; }
+  #camBtn:disabled{ cursor: default; opacity: 0.5; border-color: rgba(255,255,255,0.2); color: #fff; }
 </style>
 </head>
 <body>
@@ -71,9 +91,12 @@
 
 <div id="ui">
   <div id="title">FLU<span>I</span>D</div>
-  <div id="hint">
-    move mouse to disturb &nbsp;·&nbsp; hold click to <b>pull</b>, release to <b>push</b><br>
-    arrow keys / WASD to steer the <b>red</b> core &nbsp;·&nbsp; space to burst
+  <div id="bottom">
+    <div id="hint">
+      move mouse to disturb &nbsp;·&nbsp; hold click to <b>pull</b>, release to <b>push</b><br>
+      arrow keys / WASD to steer the <b>red</b> core &nbsp;·&nbsp; space to burst
+    </div>
+    <button id="camBtn" type="button">see yourself in the metal</button>
   </div>
 </div>
 
@@ -88,13 +111,28 @@
 
   const titleEl = document.getElementById('title');
   const hintEl = document.getElementById('hint');
+  const camBtn = document.getElementById('camBtn');
+
+  // hidden webcam feed + a same-size scratch canvas we sample from.
+  // kept in the DOM (not display:none) since some browsers pause or
+  // never start a fully detached/hidden <video>.
+  const video = document.createElement('video');
+  video.autoplay = true;
+  video.playsInline = true;
+  video.setAttribute('playsinline', '');
+  video.muted = true;
+  video.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;';
+  document.body.appendChild(video);
+  const camCanvas = document.createElement('canvas');
+  const camCtx = camCanvas.getContext('2d');
+  const cam = { enabled: false, ready: false };
 
   let W = 0, H = 0, DPR = 1;
 
   function resize(){
     DPR = Math.min(window.devicePixelRatio || 1, 1.5);
-    W = canvas.width = off.width = Math.floor(innerWidth * DPR);
-    H = canvas.height = off.height = Math.floor(innerHeight * DPR);
+    W = canvas.width = off.width = camCanvas.width = Math.floor(innerWidth * DPR);
+    H = canvas.height = off.height = camCanvas.height = Math.floor(innerHeight * DPR);
     canvas.style.width = innerWidth + 'px';
     canvas.style.height = innerHeight + 'px';
   }
@@ -105,6 +143,44 @@
   function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
 
   let lightAngle = rand(0, Math.PI * 2);
+  let globalTime = 0;
+
+  camBtn.addEventListener('click', () => {
+    if (cam.enabled) return;
+    cam.enabled = true;
+    camBtn.textContent = 'requesting camera…';
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
+      .then(stream => {
+        video.srcObject = stream;
+        return video.play();
+      })
+      .then(() => {
+        cam.ready = true;
+        camBtn.textContent = 'camera reflection on';
+        camBtn.disabled = true;
+        wake();
+      })
+      .catch(err => {
+        cam.enabled = false;
+        camBtn.textContent = 'camera blocked — try again';
+        console.warn('camera unavailable:', err && err.message);
+      });
+  });
+
+  // draw the current webcam frame into camCanvas, mirrored like a mirror
+  // and cropped to cover the full canvas without stretching the face
+  function updateCamFrame(){
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return;
+    const scale = Math.max(W / vw, H / vh);
+    const dw = vw * scale, dh = vh * scale;
+    const dx = (W - dw) / 2, dy = (H - dh) / 2;
+    camCtx.save();
+    camCtx.translate(W, 0);
+    camCtx.scale(-1, 1);
+    camCtx.drawImage(video, dx, dy, dw, dh);
+    camCtx.restore();
+  }
 
   // ---------- input ----------
   const mouse = { x: -9999, y: -9999, active: false, down: false };
@@ -183,6 +259,14 @@
       this.accentAngle = rand(0, Math.PI * 2);
       this.wander = rand(0, Math.PI * 2);
       this.wanderSpeed = this.tier === 'giant' ? rand(0.003, 0.008) : rand(0.01, 0.025);
+      this.flowPhase = rand(0, Math.PI * 2);
+      this.breathePhase = rand(0, Math.PI * 2);
+      this.breatheSpeed = rand(0.4, 0.9);
+      this.breatheAmt = rand(0.03, 0.07);
+      this.zoom = rand(1.3, 1.9);
+      this.ripplePhase = rand(0, Math.PI * 2);
+      this.rippleSpeed = rand(0.3, 0.7);
+      this.baseR = this.r;
     }
 
     place(x, y){
@@ -190,13 +274,23 @@
       this.y = y;
       this.homeX = x;
       this.homeY = y;
+      this.baseR = this.r;
     }
 
     update(){
+      // slow "breathing" pulse so the surface feels alive at rest
+      this.r = this.baseR * (1 + Math.sin(globalTime * this.breatheSpeed + this.breathePhase) * this.breatheAmt);
+
       if (!this.isPlayer){
         this.wander += rand(-this.wanderSpeed, this.wanderSpeed);
         this.vx += Math.cos(this.wander) * 0.02;
         this.vy += Math.sin(this.wander) * 0.02;
+
+        // a gentle current everyone drifts with, phase-shifted per blob
+        // so the whole surface sways instead of holding dead still
+        const flow = globalTime * 0.1 + this.flowPhase;
+        this.vx += Math.cos(flow) * 0.012;
+        this.vy += Math.sin(flow) * 0.012;
 
         // gentle spring back to its home slot so the metal keeps
         // covering the screen instead of drifting into clumps
@@ -257,6 +351,8 @@
     }
 
     drawBody(){
+      if (cam.ready){ this.drawReflectiveBody(); return; }
+
       const lx = this.x + Math.cos(lightAngle) * this.r * 0.4;
       const ly = this.y + Math.sin(lightAngle) * this.r * 0.4;
 
@@ -287,13 +383,60 @@
       octx.fill();
     }
 
+    // fake a convex mirror: sample a small, zoomed-in crop of the webcam
+    // frame centred on the blob so it bulges like a reflection, then
+    // multiply a sphere-shaped shading map on top so it still reads as
+    // metal rather than a flat photo
+    drawReflectiveBody(){
+      const wobbleX = Math.sin(globalTime * this.rippleSpeed + this.ripplePhase) * this.r * 0.08;
+      const wobbleY = Math.cos(globalTime * this.rippleSpeed * 0.8 + this.ripplePhase) * this.r * 0.08;
+      const sw = Math.min((2 * this.r) / this.zoom, W);
+      const sh = Math.min((2 * this.r) / this.zoom, H);
+      const sx = clamp(this.x + wobbleX - sw / 2, 0, Math.max(0, W - sw));
+      const sy = clamp(this.y + wobbleY - sh / 2, 0, Math.max(0, H - sh));
+
+      octx.save();
+      octx.beginPath();
+      octx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+      octx.clip();
+      octx.drawImage(camCanvas, sx, sy, sw, sh, this.x - this.r, this.y - this.r, this.r * 2, this.r * 2);
+
+      const lx = this.x + Math.cos(lightAngle) * this.r * 0.4;
+      const ly = this.y + Math.sin(lightAngle) * this.r * 0.4;
+      const dark = this.color === 'red' ? '20,4,3' : this.color === 'warm' ? '35,10,7' : '12,12,14';
+      const sg = octx.createRadialGradient(lx, ly, this.r * 0.05, this.x, this.y, this.r);
+      sg.addColorStop(0,    'rgba(255,255,255,1)');
+      sg.addColorStop(0.32, 'rgba(255,255,255,0.6)');
+      sg.addColorStop(0.7,  `rgba(${dark},0.5)`);
+      sg.addColorStop(1,    `rgba(${dark},0.9)`);
+      octx.globalCompositeOperation = 'multiply';
+      octx.fillStyle = sg;
+      octx.beginPath();
+      octx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+      octx.fill();
+
+      octx.restore();
+    }
+
     drawShine(){
+      // broad soft sheen — the smooth gradient sweep chrome renders as
+      const sr = this.r * 0.55;
+      const sx = this.x - Math.cos(lightAngle) * this.r * 0.3;
+      const sy = this.y - Math.sin(lightAngle) * this.r * 0.3;
+      const sg = octx.createRadialGradient(sx, sy, 0, sx, sy, sr);
+      sg.addColorStop(0, 'rgba(255,255,255,0.22)');
+      sg.addColorStop(1, 'rgba(255,255,255,0)');
+      octx.fillStyle = sg;
+      octx.beginPath();
+      octx.arc(sx, sy, sr, 0, Math.PI * 2);
+      octx.fill();
+
       // tight glossy hotspot for the chrome highlight
-      const hr = this.r * 0.12;
+      const hr = this.r * 0.11;
       const hx = this.x - Math.cos(lightAngle) * this.r * 0.42;
       const hy = this.y - Math.sin(lightAngle) * this.r * 0.42;
       const hg = octx.createRadialGradient(hx, hy, 0, hx, hy, hr);
-      hg.addColorStop(0, 'rgba(255,255,255,0.75)');
+      hg.addColorStop(0, 'rgba(255,255,255,0.9)');
       hg.addColorStop(1, 'rgba(255,255,255,0)');
       octx.fillStyle = hg;
       octx.beginPath();
@@ -352,6 +495,7 @@
   })();
 
   function step(){
+    globalTime += 0.016;
     lightAngle += 0.0015;
     for (const b of blobs) b.update();
 
@@ -364,6 +508,8 @@
   }
 
   function render(){
+    if (cam.ready) updateCamFrame();
+
     octx.clearRect(0, 0, W, H);
 
     octx.globalCompositeOperation = 'source-over';
@@ -377,7 +523,7 @@
     ctx.fillRect(0, 0, W, H);
 
     ctx.save();
-    ctx.filter = `blur(${8 * DPR}px) contrast(1.25)`;
+    ctx.filter = `blur(${9 * DPR}px) contrast(1.3)`;
     ctx.drawImage(off, 0, 0);
     ctx.restore();
 
