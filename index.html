@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>FLUID</title>
+<meta name="description" content="An interactive fluid blob playground — black, white and red. Move your mouse, steer with arrow keys, click to burst.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='45' fill='%23ff2b2b'/%3E%3C/svg%3E">
+<style>
+  :root{
+    color-scheme: dark;
+  }
+  *{ box-sizing: border-box; }
+  html, body{
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+    overscroll-behavior: none;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+  canvas{
+    display: block;
+    position: fixed;
+    inset: 0;
+    touch-action: none;
+  }
+  #ui{
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: clamp(16px, 4vw, 40px);
+    color: #fff;
+    z-index: 5;
+  }
+  #title{
+    font-weight: 700;
+    letter-spacing: 0.3em;
+    font-size: clamp(20px, 3.5vw, 34px);
+    text-transform: uppercase;
+    opacity: 0.9;
+    transition: opacity 1.2s ease;
+    mix-blend-mode: difference;
+  }
+  #title span{
+    color: #ff2b2b;
+  }
+  #hint{
+    align-self: flex-start;
+    font-size: clamp(10px, 1.4vw, 13px);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    opacity: 0.55;
+    line-height: 1.8;
+    transition: opacity 1.5s ease;
+    mix-blend-mode: difference;
+  }
+  #hint b{ color: #ff2b2b; font-weight: 700; }
+  .faded{ opacity: 0 !important; }
+</style>
+</head>
+<body>
+
+<canvas id="scene"></canvas>
+
+<div id="ui">
+  <div id="title">FLU<span>I</span>D</div>
+  <div id="hint">
+    move mouse to disturb &nbsp;·&nbsp; hold click to <b>pull</b>, release to <b>push</b><br>
+    arrow keys / WASD to steer the <b>red</b> core &nbsp;·&nbsp; space to burst
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d');
+  const off = document.createElement('canvas');
+  const octx = off.getContext('2d');
+
+  const titleEl = document.getElementById('title');
+  const hintEl = document.getElementById('hint');
+
+  let W = 0, H = 0, DPR = 1;
+
+  function resize(){
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = canvas.width = off.width = Math.floor(innerWidth * DPR);
+    H = canvas.height = off.height = Math.floor(innerHeight * DPR);
+    canvas.style.width = innerWidth + 'px';
+    canvas.style.height = innerHeight + 'px';
+  }
+  addEventListener('resize', resize);
+  resize();
+
+  function rand(a, b){ return a + Math.random() * (b - a); }
+  function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+
+  let lightAngle = rand(0, Math.PI * 2);
+
+  // ---------- input ----------
+  const mouse = { x: -9999, y: -9999, active: false, down: false };
+  const keys = { up:false, down:false, left:false, right:false };
+
+  function pointerPos(e){
+    const t = (e.touches && e.touches[0]) || e;
+    return { x: t.clientX * DPR, y: t.clientY * DPR };
+  }
+
+  window.addEventListener('mousemove', e => {
+    const p = pointerPos(e);
+    mouse.x = p.x; mouse.y = p.y; mouse.active = true;
+    wake();
+  }, { passive: true });
+
+  window.addEventListener('mousedown', () => { mouse.down = true; wake(); });
+  window.addEventListener('mouseup', () => { mouse.down = false; });
+  window.addEventListener('mouseleave', () => { mouse.active = false; });
+
+  window.addEventListener('touchstart', e => {
+    const p = pointerPos(e);
+    mouse.x = p.x; mouse.y = p.y; mouse.active = true; mouse.down = true;
+    wake();
+  }, { passive: true });
+  window.addEventListener('touchmove', e => {
+    const p = pointerPos(e);
+    mouse.x = p.x; mouse.y = p.y; mouse.active = true;
+  }, { passive: true });
+  window.addEventListener('touchend', () => { mouse.down = false; mouse.active = false; });
+
+  const keyMap = {
+    ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right',
+    KeyW:'up', KeyS:'down', KeyA:'left', KeyD:'right'
+  };
+
+  window.addEventListener('keydown', e => {
+    if (keyMap[e.code]){ keys[keyMap[e.code]] = true; wake(); e.preventDefault(); }
+    if (e.code === 'Space'){ burst(player.x, player.y, 1); wake(); e.preventDefault(); }
+  });
+  window.addEventListener('keyup', e => {
+    if (keyMap[e.code]){ keys[keyMap[e.code]] = false; }
+  });
+
+  window.addEventListener('click', e => {
+    burst(e.clientX * DPR, e.clientY * DPR, 0.7);
+  });
+
+  let awake = false;
+  function wake(){
+    if (awake) return;
+    awake = true;
+    titleEl.classList.add('faded');
+    setTimeout(() => hintEl.classList.add('faded'), 3200);
+  }
+
+  // ---------- ripples (click / space bursts) ----------
+  const ripples = [];
+  function burst(x, y, power){
+    ripples.push({ x, y, r: 0, power, life: 1 });
+  }
+
+  // ---------- blobs ----------
+  class Blob{
+    constructor(isPlayer, tier){
+      this.isPlayer = !!isPlayer;
+      this.tier = tier || 'mid';
+      const sizeRange = this.tier === 'giant' ? [190, 340] : this.tier === 'mid' ? [80, 180] : [36, 48];
+      this.r = (isPlayer ? rand(46, 56) : rand(sizeRange[0], sizeRange[1])) * DPR;
+      this.x = rand(this.r, W - this.r);
+      this.y = rand(this.r, H - this.r);
+      this.vx = rand(-0.15, 0.15);
+      this.vy = rand(-0.15, 0.15);
+      this.color = isPlayer ? 'red' : 'metal';
+      this.accent = !isPlayer && Math.random() < 0.4;
+      this.accentAngle = rand(0, Math.PI * 2);
+      this.wander = rand(0, Math.PI * 2);
+      this.wanderSpeed = this.tier === 'giant' ? rand(0.003, 0.008) : rand(0.01, 0.025);
+    }
+
+    place(x, y){
+      this.x = x;
+      this.y = y;
+      this.homeX = x;
+      this.homeY = y;
+    }
+
+    update(){
+      if (!this.isPlayer){
+        this.wander += rand(-this.wanderSpeed, this.wanderSpeed);
+        this.vx += Math.cos(this.wander) * 0.02;
+        this.vy += Math.sin(this.wander) * 0.02;
+
+        // gentle spring back to its home slot so the metal keeps
+        // covering the screen instead of drifting into clumps
+        const springK = this.tier === 'giant' ? 0.0009 : 0.002;
+        this.vx += (this.homeX - this.x) * springK;
+        this.vy += (this.homeY - this.y) * springK;
+      } else {
+        const ax = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+        const ay = (keys.down ? 1 : 0) - (keys.up ? 1 : 0);
+        this.vx += ax * 0.55 * DPR;
+        this.vy += ay * 0.55 * DPR;
+      }
+
+      // mouse field
+      if (mouse.active){
+        const dx = this.x - mouse.x, dy = this.y - mouse.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const influence = 260 * DPR;
+        if (dist < influence){
+          const strength = (1 - dist / influence) * 0.9 * DPR;
+          const sign = mouse.down ? -1 : 1; // hold = pull in, release = push away
+          this.vx += (dx / dist) * strength * sign;
+          this.vy += (dy / dist) * strength * sign;
+        }
+      }
+
+      // ripple forces
+      for (const rp of ripples){
+        const dx = this.x - rp.x, dy = this.y - rp.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const band = 90 * DPR;
+        const d = Math.abs(dist - rp.r);
+        if (d < band){
+          const f = (1 - d / band) * rp.power * rp.life * 2.2 * DPR;
+          this.vx += (dx / dist) * f;
+          this.vy += (dy / dist) * f;
+        }
+      }
+
+      this.vx *= 0.94;
+      this.vy *= 0.94;
+
+      const tierSpeed = this.tier === 'giant' ? 0.6 : this.tier === 'mid' ? 1.4 : 1.8;
+      const maxSpeed = (this.isPlayer ? 9 : tierSpeed) * DPR;
+      const sp = Math.hypot(this.vx, this.vy);
+      if (sp > maxSpeed){
+        this.vx = (this.vx / sp) * maxSpeed;
+        this.vy = (this.vy / sp) * maxSpeed;
+      }
+
+      this.x += this.vx;
+      this.y += this.vy;
+
+      if (this.x < this.r){ this.x = this.r; this.vx *= -0.5; }
+      if (this.x > W - this.r){ this.x = W - this.r; this.vx *= -0.5; }
+      if (this.y < this.r){ this.y = this.r; this.vy *= -0.5; }
+      if (this.y > H - this.r){ this.y = H - this.r; this.vy *= -0.5; }
+    }
+
+    drawBody(){
+      const lx = this.x + Math.cos(lightAngle) * this.r * 0.4;
+      const ly = this.y + Math.sin(lightAngle) * this.r * 0.4;
+
+      const g = octx.createRadialGradient(lx, ly, this.r * 0.05, this.x, this.y, this.r);
+      if (this.color === 'red'){
+        g.addColorStop(0,    '#ffd9cc');
+        g.addColorStop(0.08, '#e8382b');
+        g.addColorStop(0.4,  '#3a0a08');
+        g.addColorStop(0.7,  '#0c0c0d');
+        g.addColorStop(1,    'rgba(0,0,0,0)');
+      } else {
+        g.addColorStop(0,    '#e6e6ea');
+        g.addColorStop(0.09, '#5b5b60');
+        g.addColorStop(0.4,  '#302f33');
+        g.addColorStop(0.75, '#242327');
+        g.addColorStop(0.93, '#131315');
+        g.addColorStop(1,    'rgba(0,0,0,0)');
+      }
+      octx.fillStyle = g;
+      octx.beginPath();
+      octx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+      octx.fill();
+    }
+
+    drawShine(){
+      // tight glossy hotspot for the chrome highlight
+      const hr = this.r * 0.12;
+      const hx = this.x - Math.cos(lightAngle) * this.r * 0.42;
+      const hy = this.y - Math.sin(lightAngle) * this.r * 0.42;
+      const hg = octx.createRadialGradient(hx, hy, 0, hx, hy, hr);
+      hg.addColorStop(0, 'rgba(255,255,255,0.75)');
+      hg.addColorStop(1, 'rgba(255,255,255,0)');
+      octx.fillStyle = hg;
+      octx.beginPath();
+      octx.arc(hx, hy, hr, 0, Math.PI * 2);
+      octx.fill();
+
+      // red light reflecting within the metal surface
+      if (this.accent){
+        const ar = Math.min(this.r * 0.32, 60 * DPR);
+        const ax = this.x + Math.cos(this.accentAngle + lightAngle) * this.r * 0.5;
+        const ay = this.y + Math.sin(this.accentAngle + lightAngle) * this.r * 0.5;
+        const ag = octx.createRadialGradient(ax, ay, 0, ax, ay, ar);
+        ag.addColorStop(0, 'rgba(255,70,50,0.4)');
+        ag.addColorStop(0.6, 'rgba(255,40,30,0.15)');
+        ag.addColorStop(1, 'rgba(255,40,30,0)');
+        octx.fillStyle = ag;
+        octx.beginPath();
+        octx.arc(ax, ay, ar, 0, Math.PI * 2);
+        octx.fill();
+      }
+    }
+  }
+
+  const player = new Blob(true);
+  const blobs = [player];
+  const GIANTS = 6, MIDS = 16;
+  for (let i = 0; i < GIANTS; i++) blobs.push(new Blob(false, 'giant'));
+  for (let i = 0; i < MIDS; i++) blobs.push(new Blob(false, 'mid'));
+
+  // tile giants across a coarse grid, sized so neighbours overlap and the
+  // metal covers the whole screen; mids ride on top in a finer grid for
+  // surface detail. A "home" slot lets physics jostle them without ever
+  // opening up bare black gaps.
+  (function layout(){
+    function tile(list, growToFill){
+      if (!list.length) return;
+      const cols = Math.max(1, Math.round(Math.sqrt(list.length * (W / H))));
+      const rows = Math.ceil(list.length / cols);
+      const cellW = W / cols, cellH = H / rows;
+      list.forEach((b, i) => {
+        if (growToFill) b.r = rand(0.6, 0.85) * Math.max(cellW, cellH);
+        const cx = (i % cols + 0.5) * cellW;
+        const cy = (Math.floor(i / cols) + 0.5) * cellH;
+        b.place(
+          clamp(cx + rand(-cellW, cellW) * 0.3, b.r, W - b.r),
+          clamp(cy + rand(-cellH, cellH) * 0.3, b.r, H - b.r)
+        );
+      });
+    }
+    tile(blobs.filter(b => b.tier === 'giant'), true);
+    tile(blobs.filter(b => b.tier === 'mid'), false);
+  })();
+
+  function step(){
+    lightAngle += 0.0015;
+    for (const b of blobs) b.update();
+
+    for (let i = ripples.length - 1; i >= 0; i--){
+      const rp = ripples[i];
+      rp.r += 10 * DPR;
+      rp.life -= 0.018;
+      if (rp.life <= 0) ripples.splice(i, 1);
+    }
+  }
+
+  function render(){
+    octx.clearRect(0, 0, W, H);
+
+    octx.globalCompositeOperation = 'source-over';
+    for (const b of blobs) b.drawBody();
+
+    octx.globalCompositeOperation = 'lighter';
+    for (const b of blobs) b.drawShine();
+    octx.globalCompositeOperation = 'source-over';
+
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.filter = `blur(${9 * DPR}px) contrast(1.2)`;
+    ctx.drawImage(off, 0, 0);
+    ctx.restore();
+
+    // faint crisp ripple rings on top for extra life
+    for (const rp of ripples){
+      ctx.beginPath();
+      ctx.arc(rp.x, rp.y, rp.r, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255,255,255,${0.15 * rp.life})`;
+      ctx.lineWidth = 1.5 * DPR;
+      ctx.stroke();
+    }
+  }
+
+  function loop(){
+    step();
+    render();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
